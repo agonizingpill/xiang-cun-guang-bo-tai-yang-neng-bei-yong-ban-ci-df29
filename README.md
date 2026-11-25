@@ -52,11 +52,22 @@ Compose 运行 Nginx、Python FastAPI、独立 Redis 消费进程、SQL 数据�
 | 业务任务 | FastAPI 路由 | 页面 |
 |---|---|---|
 | 节目时段表 | `/airslots` /airslots/mark-offline | `frontend/src/pages/airslots.js` |
-| 蓄电班记与测量 | `/battery_logs` /battery_logs/log-charge，/battery_logs/approve-meter | `frontend/src/pages/battery_logs.js` |
+| 蓄电班记与测量 | `/battery_logs` /battery_logs/log-charge，/battery_logs/backfill，/battery_logs/approve-meter，/battery_logs/confirm-shift，/battery_logs/pending-shifts | `frontend/src/pages/battery_logs.js` |
 | 备用分钟核算 | `/reserves` /reserves/forecast-wh，/reserves/save-reserve | `frontend/src/pages/reserves.js` |
 | 班组备播卡 | `/switchcards` /switchcards/issue-switch，/switchcards/handover | `frontend/src/pages/switchcards.js` |
 
 SQL 实体与约束在 `backend/domain` 下维护。前端使用原生 ES modules。核心算子为 Fourier 基 + OLS。OLS 在训练时段拟合一、二阶谐波和晴天标记。备用量为截零后的点预测加末 6 小时 MAE。
+
+### 抄数复核、尖峰挂起与换档确认
+
+同一只电表有至少 8 条更早的已审签读数后，`domain/review_engine.py` 用这些读数拟合 Fourier+OLS，给出预测与历史误差带（MAE / 残差尺度与额定相对容差取大）。每笔抄数在 `GET /battery_logs` 都带 `verdict` / `verdict_label`（页面“判定”列）：
+
+- `in_band` 误差带内，复核员 `approve-meter` 后审签；历史不足时为 `history_short`，按纸本基线审签为 `baseline`。
+- 孤立的同向超带判为 `spike`（尖峰，疑似单次抄错），连续 2 小时为 `watch`，均保持 `verified=false` 挂起。
+- 连续至少 3 小时同向超带形成 `shift_pending` 待审换档段，`GET /battery_logs/pending-shifts`（及 `/battery_logs/reviews` 等别名）返回段范围、`range_token` 与整数 `version`。
+- 复核员 `POST /battery_logs/confirm-shift`（可只给段内 `record`，或 `meter`+`start_hour`+`end_hour`，并附 `range_token`/`version`）确认换档后，整段置 `verified=true`、结论 `shift_confirmed`，于是进入后续 Fourier 拟合。
+- 晚到抄数走 `/battery_logs/backfill`（与 `log-charge` 同体），会实时重建连续游程，可能补齐或延长待审段并改变 `range_token`。
+- 确认所依据的范围已被补录改变时，返回 409 `code=range_changed`、文案含“待审范围已变…重新审核”，响应体带最新 `pending_range`/`range_token`；用新令牌重审后即可确认。电表版本行 + 内容令牌 + 行锁保证补录与确认并发时不丢范围。
 
 按模拟广播班记推演。卡片供人工值守查阅，应用只处理纸本条件的数字记录。
 

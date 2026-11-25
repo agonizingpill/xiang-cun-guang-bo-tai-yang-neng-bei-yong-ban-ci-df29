@@ -5,22 +5,26 @@ import {status} from './widgets.js';
 
 const fallback = field => field.kind === 'token' ? evidence.get() : field.initial;
 function input(field) {
+  const optional = field.optional === true || field.required === false;
   if (field.kind === 'bool') return el('select', {name:field.name},
     el('option',{value:'true', selected:fallback(field) === true ? '' : undefined},'是'),
     el('option',{value:'false', selected:fallback(field) === false ? '' : undefined},'否'));
-  if (field.kind === 'json') return el('textarea', {name:field.name, required:''}, JSON.stringify(fallback(field), null, 2));
+  if (field.kind === 'json') return el('textarea', {name:field.name, required: optional ? undefined : ''}, JSON.stringify(fallback(field), null, 2));
   const numeric = ['int','float'].includes(field.kind);
-  return el('input',{name:field.name, required:'', type:numeric ? 'number' : 'text',
-    step:field.kind === 'float' ? 'any' : undefined, value:fallback(field) ?? ''});
+  return el('input',{name:field.name, required: optional ? undefined : '', type:numeric ? 'number' : 'text',
+    step:field.kind === 'float' ? 'any' : undefined, value:fallback(field) ?? '',
+    placeholder:field.placeholder || (optional ? '可留空' : undefined)});
 }
 function parse(form, fields) {
   const data = new FormData(form);
   return Object.fromEntries(fields.map(field => {
-    const raw = data.get(field.name);
+    let raw = data.get(field.name);
+    const optional = field.optional === true || field.required === false;
+    if (optional && (raw === '' || raw === null || raw === undefined)) return [field.name, undefined];
     const convert = ['int','float'].includes(field.kind) ? Number :
       ['bool','json'].includes(field.kind) ? JSON.parse : String;
     return [field.name, convert(raw)];
-  }));
+  }).filter(([, value]) => value !== undefined));
 }
 export function actionForm(action, refresh) {
   const notice = status('');
@@ -44,7 +48,10 @@ export function actionForm(action, refresh) {
         if (result.status === 'rejected') throw new Error(result.detail);
         notice.textContent = '任务 ' + data.token + ' · ' + display(result.result);
       } else {
-        notice.textContent = action.success + ' · ' + display(data.code ?? data.status);
+        const summary = data.message || data.verdict_label
+          || (data.pending_range ? '待审范围 ' + display(data.pending_range.range_token) : '')
+          || display(data.code ?? data.status);
+        notice.textContent = action.success + ' · ' + summary;
       }
       notice.classList.add('ok');
       await refresh();

@@ -1,10 +1,12 @@
 import json
 from sqlalchemy import func, select
 
-from core.db import transaction
+from core.db import metadata, engine, transaction
 from domain.demo import FIXTURES
 
 def seed():
+    # 允许在未启动 uvicorn / 未跑 lifespan 的情况下直接初始化演示数据。
+    metadata.create_all(engine)
     sizes = {}
     with transaction() as conn:
         for table, rows in FIXTURES:
